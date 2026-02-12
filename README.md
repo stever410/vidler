@@ -83,15 +83,17 @@ GitHub Actions workflow: `.github/workflows/release-build.yml`
 
 - Triggers:
   - On pushes to `master` and pull requests: validate formatting + build
-  - On pushes to `master` and manual `workflow_dispatch`: produce release artifacts
+  - On pushes to `master` and manual `workflow_dispatch`: build and publish prerelease assets to GitHub Releases
 - Builds on:
   - `ubuntu-latest`
   - `macos-latest`
   - `windows-latest`
 - Produces one artifact per OS:
-  - `vidler-Linux.tgz`
-  - `vidler-macOS.tgz`
-  - `vidler-Windows.tgz`
+  - `vidler-Linux.deb`
+  - `vidler-macOS.pkg`
+  - `vidler-Windows-setup.exe`
+- Publishes them in the GitHub Releases tab with tag format: `master-<commit_sha>`
+- Installer prerequisite: Node.js 24+ must already be installed on the target machine.
 
 ### 3. Run
 
