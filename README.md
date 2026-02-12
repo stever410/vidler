@@ -81,7 +81,9 @@ pnpm release:build
 
 GitHub Actions workflow: `.github/workflows/release-build.yml`
 
-- Triggers on `v*` tags and manual `workflow_dispatch`
+- Triggers:
+  - On pushes to `master` and pull requests: validate formatting + build
+  - On pushes to `master` and manual `workflow_dispatch`: produce release artifacts
 - Builds on:
   - `ubuntu-latest`
   - `macos-latest`
@@ -90,15 +92,6 @@ GitHub Actions workflow: `.github/workflows/release-build.yml`
   - `vidler-Linux.tgz`
   - `vidler-macOS.tgz`
   - `vidler-Windows.tgz`
-
-## Continuous Integration
-
-GitHub Actions workflow: `.github/workflows/ci.yml`
-
-- Triggers on all pushes and pull requests
-- Runs on `ubuntu-latest`
-- Validates formatting in check-only mode
-- Builds the project
 
 ### 3. Run
 

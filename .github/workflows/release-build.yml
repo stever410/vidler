@@ -3,20 +3,14 @@ name: release-build
 on:
   workflow_dispatch:
   push:
-    tags:
-      - "v*"
+    branches:
+      - "master"
+  pull_request:
 
 jobs:
-  build:
-    name: Build (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-          - ubuntu-latest
-          - macos-latest
-          - windows-latest
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
@@ -24,8 +18,6 @@ jobs:
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: 10
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -41,6 +33,35 @@ jobs:
 
       - name: Build
         run: pnpm build
+
+  build-release:
+    name: Release Build (${{ matrix.os }})
+    if: github.ref == 'refs/heads/master' || github.event_name == 'workflow_dispatch'
+    needs: validate
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
 
       - name: Pack tarball
         run: pnpm pack
