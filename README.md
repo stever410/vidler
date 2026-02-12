@@ -91,6 +91,15 @@ GitHub Actions workflow: `.github/workflows/release-build.yml`
   - `vidler-macOS.tgz`
   - `vidler-Windows.tgz`
 
+## Continuous Integration
+
+GitHub Actions workflow: `.github/workflows/ci.yml`
+
+- Triggers on all pushes and pull requests
+- Runs on `ubuntu-latest`
+- Validates formatting in check-only mode
+- Builds the project
+
 ### 3. Run
 
 Interactive mode:

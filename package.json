@@ -11,8 +11,10 @@
 		"build": "tsc",
 		"dev": "tsc --watch",
 		"format": "pnpm exec biome check --write",
+		"format:check": "pnpm exec biome check",
 		"release:build": "pnpm format && pnpm build && pnpm pack"
 	},
+	"packageManager": "pnpm@10.29.3",
 	"files": [
 		"dist"
 	],
