@@ -156,7 +156,7 @@ jobs:
       - name: Publish to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.meta.outputs.version }}-master-${{ steps.meta.outputs.short_sha }}
+          tag_name: v${{ steps.meta.outputs.version }}
           name: Vidler v${{ steps.meta.outputs.version }} (master @ ${{ steps.meta.outputs.short_sha }})
           prerelease: true
           generate_release_notes: true

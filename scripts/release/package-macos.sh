@@ -24,6 +24,15 @@ popd >/dev/null
 
 cat >"$PKG_ROOT/usr/local/bin/vidler" <<'EOF'
 #!/usr/bin/env sh
+if ! command -v node >/dev/null 2>&1; then
+  echo "VIDLER requires Node.js 24+ (node not found)." >&2
+  exit 1
+fi
+NODE_MAJOR="$(node -p "process.versions.node.split('.')[0]")"
+if [ "$NODE_MAJOR" -lt 24 ]; then
+  echo "VIDLER requires Node.js 24+ (found: $(node -v))." >&2
+  exit 1
+fi
 exec /usr/bin/env node /usr/local/lib/vidler/dist/cli.js "$@"
 EOF
 chmod 0755 "$PKG_ROOT/usr/local/bin/vidler"

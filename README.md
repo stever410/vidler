@@ -77,25 +77,6 @@ Release build (package tarball):
 pnpm release:build
 ```
 
-## Multi-OS Release Builds
-
-GitHub Actions workflow: `.github/workflows/release-build.yml`
-
-- Triggers:
-  - On pushes to `master` and pull requests: validate formatting + build
-  - On pushes to `master` and manual `workflow_dispatch`: build and publish prerelease assets to GitHub Releases
-- Builds on:
-  - `ubuntu-latest`
-  - `macos-latest`
-  - `windows-latest`
-- Produces one artifact per OS:
-  - `vidler-Linux.deb`
-  - `vidler-macOS.pkg`
-  - `vidler-Windows-setup.exe`
-- Publishes them in the GitHub Releases tab with tag format: `v<version>-master-<short_sha>`
-- Edit release note content in `.github/release-notes.md` (commit SHA/message are appended automatically).
-- Installer prerequisite: Node.js 24+ must already be installed on the target machine.
-
 ### 3. Run
 
 Interactive mode:
@@ -176,13 +157,6 @@ flowchart LR
     EVT --> UI[Ink App]
     EVT --> HEADLESS[Headless / JSON Output]
 ```
-
-## Exit Codes
-
-- `0` success
-- `1` runtime/download error
-- `2` invalid input
-- `3` dependency/bootstrap failure
 
 ## Contributing
 
