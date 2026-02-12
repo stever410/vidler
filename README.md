@@ -3,7 +3,7 @@
 > Your all-in-one command center for fast, high-quality video downloads.
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178c6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![Node](https://img.shields.io/badge/Node-16%2B-339933?style=for-the-badge&logo=node.js&logoColor=white)](https://nodejs.org/)
+[![Node](https://img.shields.io/badge/node-24.x%20LTS-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![Ink](https://img.shields.io/badge/UI-Ink-000000?style=for-the-badge)](https://github.com/vadimdemedes/ink)
 [![License](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)](./package.json)
 
@@ -24,7 +24,7 @@ __     ___ ____  _     _____ ____
 
 ## Tech Stack
 
-- Runtime: Node.js (ESM, `>=16`)
+- Runtime: Node.js (ESM, `>=24`)
 - Language: TypeScript
 - Terminal UI: Ink + React + `@inkjs/ui`
 - CLI parsing: Meow
