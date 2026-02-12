@@ -28,6 +28,21 @@ Pop-Location
 
 $launcher = @'
 @echo off
+where node >nul 2>nul
+if errorlevel 1 (
+  echo VIDLER requires Node.js 24+ (node not found).
+  exit /b 1
+)
+for /f "delims=" %%V in ('node -p "process.versions.node.split(''.'')[0]" 2^>nul') do set NODE_MAJOR=%%V
+if not defined NODE_MAJOR (
+  echo VIDLER could not determine Node.js version.
+  exit /b 1
+)
+if %NODE_MAJOR% LSS 24 (
+  echo VIDLER requires Node.js 24+.
+  node -v
+  exit /b 1
+)
 node "%~dp0dist\cli.js" %*
 '@
 Set-Content -Path (Join-Path $appDir "vidler.cmd") -Value $launcher -NoNewline
