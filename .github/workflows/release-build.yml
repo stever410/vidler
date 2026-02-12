@@ -120,6 +120,32 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve release metadata
+        id: meta
+        shell: bash
+        run: |
+          VERSION="$(node -p "JSON.parse(require('fs').readFileSync('package.json','utf8')).version")"
+          SHORT_SHA="${GITHUB_SHA::7}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "short_sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Build release body
+        shell: bash
+        run: |
+          cp .github/release-notes.md release-body.md
+          COMMIT_SHA="$(git rev-parse --short HEAD)"
+          COMMIT_MESSAGE="$(git log -1 --pretty=%s)"
+          {
+            echo ""
+            echo "## Build Commit"
+            echo ""
+            echo "- SHA: \`${COMMIT_SHA}\`"
+            echo "- Message: ${COMMIT_MESSAGE}"
+          } >> release-body.md
+
       - name: Download release artifacts
         uses: actions/download-artifact@v4
         with:
@@ -130,8 +156,9 @@ jobs:
       - name: Publish to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: master-${{ github.sha }}
-          name: Master build ${{ github.sha }}
+          tag_name: v${{ steps.meta.outputs.version }}-master-${{ steps.meta.outputs.short_sha }}
+          name: Vidler v${{ steps.meta.outputs.version }} (master @ ${{ steps.meta.outputs.short_sha }})
           prerelease: true
           generate_release_notes: true
+          body_path: release-body.md
           files: release-assets/*

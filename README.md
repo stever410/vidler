@@ -92,7 +92,8 @@ GitHub Actions workflow: `.github/workflows/release-build.yml`
   - `vidler-Linux.deb`
   - `vidler-macOS.pkg`
   - `vidler-Windows-setup.exe`
-- Publishes them in the GitHub Releases tab with tag format: `master-<commit_sha>`
+- Publishes them in the GitHub Releases tab with tag format: `v<version>-master-<short_sha>`
+- Edit release note content in `.github/release-notes.md` (commit SHA/message are appended automatically).
 - Installer prerequisite: Node.js 24+ must already be installed on the target machine.
 
 ### 3. Run
