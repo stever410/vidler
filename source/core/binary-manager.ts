@@ -1,6 +1,6 @@
 import { createWriteStream } from "node:fs";
 import { access, chmod, mkdir, stat } from "node:fs/promises";
-import { homedir, platform } from "node:os";
+import { arch, homedir, platform } from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -23,11 +23,11 @@ export class BinaryManager {
 		await mkdir(this.#cacheDir, { recursive: true });
 
 		const ytDlpPath = await this.#ensureYtDlp(verbose);
-		const ffmpegPath = await this.#findBinary("ffmpeg");
+		const ffmpegPath = await this.#ensureFfmpeg(verbose);
 
 		if (!ffmpegPath && verbose) {
 			console.error(
-				"warning: ffmpeg not found in PATH. Some merges/formats may fail.",
+				"warning: ffmpeg is unavailable. Some merges/formats may fail.",
 			);
 		}
 
@@ -69,6 +69,60 @@ export class BinaryManager {
 		return cachedPath;
 	}
 
+	async #ensureFfmpeg(verbose: boolean): Promise<string | undefined> {
+		const existing = await this.#findBinary("ffmpeg");
+		if (existing) {
+			return existing;
+		}
+
+		const cachedPath = path.join(
+			this.#cacheDir,
+			this.#executableName("ffmpeg"),
+		);
+		if (await this.#isExecutable(cachedPath)) {
+			return cachedPath;
+		}
+
+		let downloadUrl: string | undefined;
+		try {
+			downloadUrl = await this.#resolveFfmpegDownloadUrl();
+		} catch (error) {
+			if (verbose) {
+				const message = error instanceof Error ? error.message : String(error);
+				console.error(
+					`warning: failed to resolve ffmpeg bootstrap URL: ${message}`,
+				);
+			}
+			return undefined;
+		}
+		if (!downloadUrl) {
+			return undefined;
+		}
+
+		if (verbose) {
+			console.error(`bootstrapping ffmpeg from ${downloadUrl}`);
+		}
+
+		try {
+			await downloadToFile(downloadUrl, cachedPath);
+			if (platform() !== "win32") {
+				await chmod(cachedPath, 0o755);
+			}
+
+			if (!(await this.#isExecutable(cachedPath))) {
+				throw new DependencyError("Failed to bootstrap ffmpeg binary.");
+			}
+
+			return cachedPath;
+		} catch (error) {
+			if (verbose) {
+				const message = error instanceof Error ? error.message : String(error);
+				console.error(`warning: failed to bootstrap ffmpeg: ${message}`);
+			}
+			return undefined;
+		}
+	}
+
 	#ytDlpUrl(): string | undefined {
 		if (platform() === "linux") {
 			return "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp";
@@ -83,6 +137,107 @@ export class BinaryManager {
 		}
 
 		return undefined;
+	}
+
+	async #resolveFfmpegDownloadUrl(): Promise<string | undefined> {
+		const candidates = this.#ffmpegAssetCandidates();
+		if (candidates.length === 0) {
+			return undefined;
+		}
+
+		const response = await fetch(
+			"https://api.github.com/repos/eugeneware/ffmpeg-static/releases/latest",
+			{
+				headers: {
+					accept: "application/vnd.github+json",
+					"user-agent": "vidler/1.0",
+				},
+			},
+		);
+		if (!response.ok) {
+			throw new DependencyError(
+				`Failed to resolve ffmpeg release metadata (${response.status}).`,
+			);
+		}
+
+		const payload = (await response.json()) as {
+			assets?: Array<{ name?: string; browser_download_url?: string }>;
+		};
+		const assets = payload.assets ?? [];
+
+		for (const name of candidates) {
+			const exact = assets.find(
+				(asset) => asset.name === name && asset.browser_download_url,
+			);
+			if (exact?.browser_download_url) {
+				return exact.browser_download_url;
+			}
+		}
+
+		for (const name of candidates) {
+			const prefix = name.endsWith(".exe") ? name.slice(0, -4) : name;
+			const relaxed = assets.find((asset) => {
+				const assetName = asset.name ?? "";
+				return (
+					Boolean(asset.browser_download_url) &&
+					assetName.startsWith(prefix) &&
+					!assetName.endsWith(".gz") &&
+					!assetName.includes(".README") &&
+					!assetName.includes(".LICENSE")
+				);
+			});
+			if (relaxed?.browser_download_url) {
+				return relaxed.browser_download_url;
+			}
+		}
+
+		return undefined;
+	}
+
+	#ffmpegAssetCandidates(): string[] {
+		const os = platform();
+		const cpu = arch();
+
+		if (os === "linux") {
+			if (cpu === "x64") {
+				return ["ffmpeg-linux-x64"];
+			}
+			if (cpu === "arm64") {
+				return ["ffmpeg-linux-arm64"];
+			}
+			if (cpu === "arm") {
+				return ["ffmpeg-linux-armhf", "ffmpeg-linux-arm"];
+			}
+			if (cpu === "ia32") {
+				return ["ffmpeg-linux-ia32", "ffmpeg-linux-x86"];
+			}
+			return [];
+		}
+
+		if (os === "darwin") {
+			if (cpu === "arm64") {
+				return ["ffmpeg-darwin-arm64"];
+			}
+			if (cpu === "x64") {
+				return ["ffmpeg-darwin-x64"];
+			}
+			return [];
+		}
+
+		if (os === "win32") {
+			if (cpu === "x64") {
+				return ["ffmpeg-win32-x64.exe", "ffmpeg-win32-x64"];
+			}
+			if (cpu === "ia32") {
+				return ["ffmpeg-win32-ia32.exe", "ffmpeg-win32-ia32"];
+			}
+			if (cpu === "arm64") {
+				return ["ffmpeg-win32-arm64.exe", "ffmpeg-win32-arm64"];
+			}
+			return [];
+		}
+
+		return [];
 	}
 
 	#executableName(base: string): string {

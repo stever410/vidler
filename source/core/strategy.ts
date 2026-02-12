@@ -7,6 +7,10 @@ import type {
 } from "./types.js";
 
 export type ProgressEmitter = (progress: DownloadProgress) => void;
+export type LogEmitter = (entry: {
+	stream: "stdout" | "stderr";
+	message: string;
+}) => void;
 
 export type DownloadStrategy = {
 	readonly name: string;
@@ -15,6 +19,7 @@ export type DownloadStrategy = {
 	download(
 		prepared: PreparedJob,
 		emit: ProgressEmitter,
+		emitLog?: LogEmitter,
 	): Promise<DownloadResult>;
 };
 
@@ -53,8 +58,8 @@ export function bindStrategyToProviders(
 		prepare(job) {
 			return base.prepare(job);
 		},
-		download(prepared, emit) {
-			return base.download(prepared, emit);
+		download(prepared, emit, emitLog) {
+			return base.download(prepared, emit, emitLog);
 		},
 	};
 }

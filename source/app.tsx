@@ -1,5 +1,7 @@
-import { Box, Static, Text, useApp, useInput } from "ink";
-import { useEffect, useMemo, useState } from "react";
+import { Alert, Badge, ProgressBar, Spinner, StatusMessage } from "@inkjs/ui";
+import chalk from "chalk";
+import { Box, Text, useApp, useInput } from "ink";
+import { useEffect, useState } from "react";
 import type { DownloadRuntime } from "./core/runtime.js";
 import type {
 	DownloadProgress,
@@ -11,6 +13,7 @@ import type {
 
 type Props = {
 	runtime: DownloadRuntime;
+	showLogs?: boolean;
 };
 
 type JobView = {
@@ -23,40 +26,54 @@ type JobView = {
 	error?: string;
 };
 
-type EventLog = {
+type DownloadLog = {
 	id: string;
-	color: "green" | "yellow" | "red" | "cyan";
+	jobId: string;
+	stream: "stdout" | "stderr" | "system";
 	message: string;
 };
 
 const EMPTY_PROGRESS: DownloadProgress = {
 	status: "queued",
 };
-const SPINNER_FRAMES = ["-", "\\", "|", "/"] as const;
 
-export default function App({ runtime }: Props) {
+const SOFT = chalk.hex("#AAB7CF");
+const ICONS = {
+	title: "◈",
+	time: "⏱",
+	speed: "⇣",
+	progress: "◌",
+	size: "⬇",
+	retry: "↻",
+	logs: "📜",
+} as const;
+
+export default function App({ runtime, showLogs = false }: Props) {
 	const { exit } = useApp();
+	const primaryJob = runtime.jobs[0];
+	const primaryJobId = primaryJob?.id ?? "job-missing";
+	const primaryProvider = primaryJob?.detectedProvider ?? "generic";
+
 	const [startedAt] = useState(() => Date.now());
 	const [now, setNow] = useState(() => Date.now());
-	const [tick, setTick] = useState(0);
 	const [showDetails, setShowDetails] = useState(true);
-	const [eventLogs, setEventLogs] = useState<EventLog[]>([]);
-	const [jobState, setJobState] = useState<Record<string, JobView>>(() =>
-		Object.fromEntries(
-			runtime.jobs.map((job) => [
-				job.id,
-				createEmptyJobView(job.id, job.detectedProvider),
-			]),
-		),
+	const [logsExpanded, setLogsExpanded] = useState(false);
+	const [downloadLogs, setDownloadLogs] = useState<DownloadLog[]>([]);
+	const [jobView, setJobView] = useState<JobView>(() =>
+		createEmptyJobView(primaryJobId, primaryProvider),
 	);
 	const [fatalError, setFatalError] = useState<string | undefined>();
+	const [notice, setNotice] = useState<string | undefined>();
 
 	useInput((input, key) => {
 		if (input === "d") {
 			setShowDetails((value) => !value);
 			return;
 		}
-
+		if (input === "l" && showLogs) {
+			setLogsExpanded((value) => !value);
+			return;
+		}
 		if (input === "q" || key.escape || (key.ctrl && input === "c")) {
 			process.exitCode = 130;
 			exit();
@@ -64,43 +81,44 @@ export default function App({ runtime }: Props) {
 	});
 
 	useEffect(() => {
-		const timeInterval = setInterval(() => setNow(Date.now()), 1000);
-		const spinnerInterval = setInterval(
-			() => setTick((value) => value + 1),
-			120,
-		);
-
+		const interval = setInterval(() => setNow(Date.now()), 1000);
 		return () => {
-			clearInterval(timeInterval);
-			clearInterval(spinnerInterval);
+			clearInterval(interval);
 		};
 	}, []);
 
 	useEffect(() => {
-		const providerByJobId = new Map(
-			runtime.jobs.map((job) => [job.id, job.detectedProvider]),
-		);
-		const resolveProvider = (jobId: string): ProviderKind =>
-			providerByJobId.get(jobId) ?? "generic";
-		const updateJob = (jobId: string, updater: (state: JobView) => JobView) => {
-			setJobState((prev) => {
-				const current =
-					prev[jobId] ?? createEmptyJobView(jobId, resolveProvider(jobId));
-				return {
+		if (!primaryJob) {
+			return;
+		}
+
+		const updateJob = (updater: (state: JobView) => JobView) => {
+			setJobView((current) => updater(current));
+		};
+		const pushDownloadLog = (
+			stream: DownloadLog["stream"],
+			message: string,
+		) => {
+			setDownloadLogs((prev) => {
+				const next = [
 					...prev,
-					[jobId]: updater(current),
-				};
+					{
+						id: `${Date.now()}-${prev.length}`,
+						jobId: primaryJobId,
+						stream,
+						message,
+					},
+				];
+				return next.slice(-160);
 			});
 		};
-		const pushEvent = (color: EventLog["color"], message: string) => {
-			setEventLogs((prev) => [
-				...prev,
-				{ id: `${Date.now()}-${prev.length}`, color, message },
-			]);
-		};
+		const isPrimaryJob = (jobId: string): boolean => jobId === primaryJobId;
 
 		const onStarted = (payload: WorkerEvents["jobStarted"]) => {
-			updateJob(payload.jobId, (current) => ({
+			if (!isPrimaryJob(payload.jobId)) {
+				return;
+			}
+			updateJob((current) => ({
 				...current,
 				status: "running",
 				attempt: payload.attempt,
@@ -109,18 +127,28 @@ export default function App({ runtime }: Props) {
 					status: "running",
 				},
 			}));
+			setNotice(undefined);
 		};
 
 		const onProgress = (payload: WorkerEvents["jobProgress"]) => {
-			updateJob(payload.jobId, (current) => ({
+			if (!isPrimaryJob(payload.jobId)) {
+				return;
+			}
+			updateJob((current) => ({
 				...current,
 				status: payload.progress.status,
-				progress: payload.progress,
+				progress: {
+					...current.progress,
+					...payload.progress,
+				},
 			}));
 		};
 
 		const onRetry = (payload: WorkerEvents["jobRetry"]) => {
-			updateJob(payload.jobId, (current) => ({
+			if (!isPrimaryJob(payload.jobId)) {
+				return;
+			}
+			updateJob((current) => ({
 				...current,
 				status: "retrying",
 				attempt: payload.attempt,
@@ -130,25 +158,30 @@ export default function App({ runtime }: Props) {
 					message: payload.reason,
 				},
 			}));
-			pushEvent(
-				"yellow",
-				`retry ${payload.jobId} attempt ${payload.attempt + 1} in ${Math.round(payload.nextDelayMs / 1000)}s`,
+			setNotice(
+				`Retrying in ${Math.round(payload.nextDelayMs / 1000)}s: ${payload.reason}`,
 			);
 		};
 
 		const onCompleted = (payload: WorkerEvents["jobCompleted"]) => {
-			updateJob(payload.jobId, (current) => ({
+			if (!isPrimaryJob(payload.jobId)) {
+				return;
+			}
+			updateJob((current) => ({
 				...current,
 				status: "completed",
 				attempt: payload.result.attempts,
 				result: payload.result,
 				progress: { ...EMPTY_PROGRESS, status: "completed", percent: 100 },
 			}));
-			pushEvent("green", `completed ${payload.jobId}`);
+			setNotice("Download completed successfully.");
 		};
 
 		const onFailed = (payload: WorkerEvents["jobFailed"]) => {
-			updateJob(payload.jobId, (current) => ({
+			if (!isPrimaryJob(payload.jobId)) {
+				return;
+			}
+			updateJob((current) => ({
 				...current,
 				status: "failed",
 				attempt: payload.result.attempts,
@@ -159,10 +192,14 @@ export default function App({ runtime }: Props) {
 					status: "failed",
 				},
 			}));
-			pushEvent(
-				"red",
-				`failed ${payload.jobId}: ${payload.result.errorMessage ?? "unknown"}`,
-			);
+			setNotice("Download failed. Review the logs for details.");
+		};
+
+		const onLog = (payload: WorkerEvents["jobLog"]) => {
+			if (!isPrimaryJob(payload.jobId)) {
+				return;
+			}
+			pushDownloadLog(payload.stream, payload.message);
 		};
 
 		runtime.pool.on("jobStarted", onStarted);
@@ -170,6 +207,9 @@ export default function App({ runtime }: Props) {
 		runtime.pool.on("jobRetry", onRetry);
 		runtime.pool.on("jobCompleted", onCompleted);
 		runtime.pool.on("jobFailed", onFailed);
+		if (showLogs) {
+			runtime.pool.on("jobLog", onLog);
+		}
 
 		void runtime
 			.start()
@@ -192,41 +232,33 @@ export default function App({ runtime }: Props) {
 			runtime.pool.off("jobRetry", onRetry);
 			runtime.pool.off("jobCompleted", onCompleted);
 			runtime.pool.off("jobFailed", onFailed);
+			if (showLogs) {
+				runtime.pool.off("jobLog", onLog);
+			}
 		};
-	}, [runtime, exit]);
+	}, [runtime, exit, primaryJob, primaryJobId, showLogs]);
 
-	const summary = useMemo(() => {
-		const rows = runtime.jobs.map(
-			(job) =>
-				jobState[job.id] ?? createEmptyJobView(job.id, job.detectedProvider),
-		);
-		const aggregateSpeed = rows.reduce(
-			(sum, row) => sum + (row.progress.speedBps ?? 0),
-			0,
-		);
-		const averagePercent =
-			rows.length === 0
-				? 0
-				: rows.reduce((sum, row) => sum + (row.progress.percent ?? 0), 0) /
-					rows.length;
-
-		return {
-			total: rows.length,
-			active: rows.filter(
-				(row) => row.status === "running" || row.status === "retrying",
-			).length,
-			completed: rows.filter((row) => row.status === "completed").length,
-			failed: rows.filter((row) => row.status === "failed").length,
-			aggregateSpeed,
-			averagePercent,
-		};
-	}, [jobState, runtime.jobs]);
-
-	const spinner = SPINNER_FRAMES[tick % SPINNER_FRAMES.length] ?? "-";
 	const elapsedSec = Math.max(0, Math.floor((now - startedAt) / 1000));
+	const progressPercent = Math.max(
+		0,
+		Math.min(
+			100,
+			jobView.progress.percent ?? (jobView.status === "completed" ? 100 : 0),
+		),
+	);
+	const statusColor = statusToColor(jobView.status);
+	const displayLogs = logsExpanded ? downloadLogs : downloadLogs.slice(-5);
+
+	if (!primaryJob) {
+		return (
+			<Alert variant="error" title="No Job">
+				No download job was scheduled.
+			</Alert>
+		);
+	}
 
 	return (
-		<Box flexDirection="column" width="100%">
+		<Box flexDirection="column" width="100%" gap={1}>
 			<Box
 				borderStyle="round"
 				borderColor="cyan"
@@ -234,158 +266,124 @@ export default function App({ runtime }: Props) {
 				paddingX={1}
 			>
 				<Box justifyContent="space-between">
-					<Text color="cyan" bold>
-						{spinner} Vidler Live
+					<Spinner label={`${ICONS.title} Vidler Live`} type="dots" />
+					<Text>
+						{SOFT(`${ICONS.time} elapsed ${formatDuration(elapsedSec)}`)}
 					</Text>
-					<Text color="gray">elapsed {formatDuration(elapsedSec)}</Text>
 				</Box>
 				<Box justifyContent="space-between">
-					<Text color="gray">q/esc quit | d toggle details</Text>
-					<Text color={summary.failed > 0 ? "red" : "green"}>
-						{summary.completed}/{summary.total} completed
+					<Text color="gray">
+						q/esc exit | d details
+						{showLogs ? " | l logs expand/collapse" : ""}
 					</Text>
-				</Box>
-			</Box>
-
-			<Box marginTop={1}>
-				<MetricCard
-					label="Active"
-					value={String(summary.active)}
-					color="cyan"
-				/>
-				<Box marginLeft={1}>
-					<MetricCard
-						label="Throughput"
-						value={formatSpeed(summary.aggregateSpeed)}
-						color="blue"
-					/>
-				</Box>
-				<Box marginLeft={1}>
-					<MetricCard
-						label="Overall"
-						value={`${summary.averagePercent.toFixed(1)}%`}
-						color="magenta"
-					/>
-				</Box>
-				<Box marginLeft={1}>
-					<MetricCard
-						label="Failed"
-						value={String(summary.failed)}
-						color={summary.failed > 0 ? "red" : "green"}
-					/>
+					<Badge color={statusColor}>
+						{statusIcon(jobView.status)} {jobView.status}
+					</Badge>
 				</Box>
 			</Box>
 
 			<Box
-				marginTop={1}
 				borderStyle="round"
-				borderColor="blue"
+				borderColor={statusColor}
 				flexDirection="column"
 				paddingX={1}
 			>
-				<Text color="blue" bold>
-					Jobs
-				</Text>
-				{runtime.jobs.map((job) => {
-					const view =
-						jobState[job.id] ??
-						createEmptyJobView(job.id, job.detectedProvider);
-					return (
-						<JobRow
-							key={job.id}
-							job={view}
-							showDetails={showDetails}
-							spinner={spinner}
+				<Box justifyContent="space-between">
+					<Text color="gray">
+						[{providerLabel(jobView.provider)}] {SOFT(jobView.id)}
+					</Text>
+					<Text>{progressPercent.toFixed(1)}%</Text>
+				</Box>
+				<Box alignItems="center" gap={1}>
+					<Box width={64}>
+						<ProgressBar value={progressPercent} />
+					</Box>
+				</Box>
+				<Box>
+					<MetricPill
+						label={`${ICONS.speed} Speed`}
+						value={formatSpeed(jobView.progress.speedBps)}
+						color="blue"
+					/>
+					<Box marginLeft={1}>
+						<MetricPill
+							label={`${ICONS.progress} ETA`}
+							value={formatEta(jobView.progress.etaSec)}
+							color="magenta"
 						/>
-					);
-				})}
+					</Box>
+					<Box marginLeft={1}>
+						<MetricPill
+							label={`${ICONS.size} Size`}
+							value={`${formatBytes(jobView.progress.downloadedBytes)} / ${formatBytes(jobView.progress.totalBytes)}`}
+							color="cyan"
+						/>
+					</Box>
+					<Box marginLeft={1}>
+						<MetricPill
+							label={`${ICONS.retry} Attempt`}
+							value={String(jobView.attempt)}
+							color={jobView.status === "retrying" ? "yellow" : "green"}
+						/>
+					</Box>
+				</Box>
+				{showDetails ? (
+					<Text color="gray">
+						output: {jobView.result?.filePath ?? "pending"} | error:{" "}
+						{jobView.error ?? "none"}
+					</Text>
+				) : null}
 			</Box>
 
-			{eventLogs.length > 0 ? (
+			{notice ? <StatusMessage variant="info">{notice}</StatusMessage> : null}
+
+			{showLogs ? (
 				<Box
-					marginTop={1}
 					borderStyle="round"
-					borderColor="magenta"
+					borderColor="yellow"
 					flexDirection="column"
 					paddingX={1}
 				>
-					<Text color="magenta" bold>
-						Events
-					</Text>
-					<Static items={eventLogs}>
-						{(log) => <Text color={log.color}>- {log.message}</Text>}
-					</Static>
+					<Box justifyContent="space-between">
+						<Text color="yellow" bold>
+							{ICONS.logs} Download Logs
+						</Text>
+						<Badge color="yellow">
+							{logsExpanded ? "expanded" : "collapsed"} ({downloadLogs.length})
+						</Badge>
+					</Box>
+					{displayLogs.length === 0 ? (
+						<Text color="gray">No log lines yet.</Text>
+					) : (
+						<Box flexDirection="column">
+							{displayLogs.map((log) => (
+								<Text key={log.id} color={downloadLogColor(log.stream)}>
+									[{log.stream}]{">"} {log.message}
+								</Text>
+							))}
+						</Box>
+					)}
 				</Box>
 			) : null}
 
 			{fatalError ? (
-				<Box marginTop={1} borderStyle="round" borderColor="red" paddingX={1}>
-					<Text color="red">Fatal: {fatalError}</Text>
-				</Box>
+				<Alert variant="error" title="Error">
+					{fatalError}
+				</Alert>
 			) : null}
 		</Box>
 	);
 }
 
-function MetricCard(props: {
+function MetricPill(props: {
 	label: string;
 	value: string;
-	color: "cyan" | "blue" | "magenta" | "red" | "green";
+	color: "cyan" | "blue" | "magenta" | "yellow" | "green";
 }) {
 	return (
 		<Box borderStyle="round" borderColor={props.color} paddingX={1}>
-			<Text>
-				<Text color="gray">{props.label}: </Text>
-				<Text color={props.color} bold>
-					{props.value}
-				</Text>
-			</Text>
-		</Box>
-	);
-}
-
-function JobRow(props: {
-	job: JobView;
-	showDetails: boolean;
-	spinner: string;
-}) {
-	const statusColor = statusToColor(props.job.status);
-	const percent = Math.max(0, Math.min(100, props.job.progress.percent ?? 0));
-	const bar = renderBar(percent, 28);
-	const statusLabel =
-		props.job.status === "running"
-			? `${props.spinner} running`
-			: props.job.status;
-
-	return (
-		<Box
-			marginTop={1}
-			flexDirection="column"
-			borderStyle="single"
-			borderColor={statusColor}
-			paddingX={1}
-		>
-			<Box justifyContent="space-between">
-				<Text color="gray">
-					[{props.job.provider}] {props.job.id}
-				</Text>
-				<Text color={statusColor} bold>
-					{statusLabel}
-				</Text>
-			</Box>
-			<Text color={statusColor}>
-				{bar} {percent.toFixed(1)}%
-			</Text>
-			{props.showDetails ? (
-				<Text color="gray">
-					attempt {props.job.attempt} | speed{" "}
-					{formatSpeed(props.job.progress.speedBps)} | eta{" "}
-					{formatEta(props.job.progress.etaSec)} | downloaded{" "}
-					{formatBytes(props.job.progress.downloadedBytes)}/
-					{formatBytes(props.job.progress.totalBytes)}
-				</Text>
-			) : null}
-			{props.job.error ? <Text color="red">{props.job.error}</Text> : null}
+			<Badge color={props.color}>{props.label}</Badge>
+			<Text> {props.value}</Text>
 		</Box>
 	);
 }
@@ -419,9 +417,47 @@ function statusToColor(
 	}
 }
 
-function renderBar(percent: number, width: number): string {
-	const filled = Math.round((percent / 100) * width);
-	return `[${"=".repeat(filled)}${"-".repeat(Math.max(0, width - filled))}]`;
+function providerLabel(provider: ProviderKind): string {
+	switch (provider) {
+		case "youtube":
+			return chalk.hex("#FF6B7D")("▶ YT");
+		case "tiktok":
+			return chalk.hex("#FFCC66")("♪ TT");
+		case "facebook":
+			return chalk.hex("#7DF9FF")("f FB");
+		case "generic":
+			return chalk.hex("#AAB7CF")("◎ WEB");
+	}
+}
+
+function statusIcon(status: JobStatus): string {
+	switch (status) {
+		case "queued":
+			return "○";
+		case "preparing":
+			return "◔";
+		case "running":
+			return "▶";
+		case "retrying":
+			return "↻";
+		case "completed":
+			return "✓";
+		case "failed":
+			return "✕";
+	}
+}
+
+function downloadLogColor(
+	stream: DownloadLog["stream"],
+): "gray" | "red" | "cyan" {
+	switch (stream) {
+		case "stderr":
+			return "red";
+		case "system":
+			return "cyan";
+		case "stdout":
+			return "gray";
+	}
 }
 
 function formatBytes(bytes?: number): string {

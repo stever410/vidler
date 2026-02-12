@@ -9,6 +9,7 @@ type RuntimeConfig = {
 	fallback: DownloadStrategy;
 	concurrency: number;
 	retries: number;
+	emitLogs?: boolean;
 };
 
 export type DownloadRuntime = {
@@ -23,7 +24,7 @@ export function createRuntime(config: RuntimeConfig): DownloadRuntime {
 		retries: config.retries,
 	});
 	const registry = new StrategyRegistry(config.strategies, config.fallback);
-	const runner = new RuntimeJobRunner(pool, registry);
+	const runner = new RuntimeJobRunner(pool, registry, config.emitLogs ?? false);
 	let runPromise: Promise<DownloadResult[]> | undefined;
 
 	return {
@@ -44,19 +45,36 @@ export function createRuntime(config: RuntimeConfig): DownloadRuntime {
 class RuntimeJobRunner {
 	readonly #pool: WorkerPool;
 	readonly #registry: StrategyRegistry;
+	readonly #emitLogs: boolean;
 
-	constructor(pool: WorkerPool, registry: StrategyRegistry) {
+	constructor(pool: WorkerPool, registry: StrategyRegistry, emitLogs: boolean) {
 		this.#pool = pool;
 		this.#registry = registry;
+		this.#emitLogs = emitLogs;
 	}
 
 	async runJob(job: DownloadJob, attempt: number): Promise<DownloadResult> {
 		this.#emitPreparing(job.id);
 		const strategy = this.#registry.resolve(job);
 		const prepared = await strategy.prepare(job);
-		const result = await strategy.download(prepared, (progress) => {
-			this.#pool.emit("jobProgress", { jobId: job.id, progress });
-		});
+		if (this.#emitLogs) {
+			this.#pool.emit("jobLog", {
+				jobId: job.id,
+				stream: "system",
+				message: `exec ${formatCommand(prepared.command, prepared.args)}`,
+			});
+		}
+		const result = await strategy.download(
+			prepared,
+			(progress) => {
+				this.#pool.emit("jobProgress", { jobId: job.id, progress });
+			},
+			this.#emitLogs
+				? (entry) => {
+						this.#pool.emit("jobLog", { jobId: job.id, ...entry });
+					}
+				: undefined,
+		);
 
 		return {
 			...result,
@@ -70,4 +88,14 @@ class RuntimeJobRunner {
 			progress: { status: "preparing" },
 		});
 	}
+}
+
+function formatCommand(command: string, args: string[]): string {
+	return [command, ...args.map(quoteArg)].join(" ");
+}
+
+function quoteArg(arg: string): string {
+	return /\s|["'`$\\]/.test(arg)
+		? `"${arg.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`
+		: arg;
 }

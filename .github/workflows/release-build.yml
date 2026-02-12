@@ -1,0 +1,67 @@
+name: release-build
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate formatting
+        run: pnpm format
+
+      - name: Build
+        run: pnpm build
+
+      - name: Pack tarball
+        run: pnpm pack
+
+      - name: Rename artifact (Linux/macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          FILE="$(ls ./*.tgz | head -n 1)"
+          mv "$FILE" "vidler-${{ runner.os }}.tgz"
+
+      - name: Rename artifact (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $file = Get-ChildItem -Path . -Filter *.tgz | Select-Object -First 1
+          Move-Item -Path $file.FullName -Destination "vidler-${{ runner.os }}.tgz"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vidler-${{ runner.os }}
+          path: vidler-${{ runner.os }}.tgz
+          if-no-files-found: error

@@ -1,6 +1,6 @@
 {
 	"name": "vidler",
-	"version": "0.0.0",
+	"version": "1.0.0",
 	"license": "MIT",
 	"bin": "dist/cli.js",
 	"type": "module",
@@ -10,12 +10,14 @@
 	"scripts": {
 		"build": "tsc",
 		"dev": "tsc --watch",
-		"format": "pnpm exec biome check --write"
+		"format": "pnpm exec biome check --write",
+		"release:build": "pnpm format && pnpm build && pnpm pack"
 	},
 	"files": [
 		"dist"
 	],
 	"dependencies": {
+		"@inkjs/ui": "^2.0.0",
 		"ink": "^6.7.0",
 		"meow": "^14.0.0",
 		"react": "^19.2.4"

@@ -22,16 +22,18 @@ const cli = meow(
 	  --quality <value>      best|worst|720p|1080p... (default: best)
 	  --output <dir>         Output directory (default: ./output)
 	  --filename <template>  Optional output filename template
-	  --concurrency <n>      Worker pool size (default: 4)
+	  --concurrency <n>      Deprecated in v1 (forced to 1)
 	  --retries <n>          Retry attempts (default: 3)
 	  --timeout <sec>        Per-attempt timeout in seconds
+	  --show-log             Show yt-dlp logs while downloading
 	  --no-progress          Disable Ink live progress UI
-	  --json                 Emit JSON events/results
+	  --json                 Emit machine-readable output
 	  --verbose              Verbose logs
 
 	Examples
 	  $ vidler "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 	  $ vidler "https://www.tiktok.com/@user/video/123" --quality 720p --output ./videos
+	  $ vidler "<url>" --show-log
 	`,
 	{
 		importMeta: import.meta,
@@ -49,7 +51,7 @@ const cli = meow(
 			},
 			concurrency: {
 				type: "number",
-				default: 4,
+				default: 1,
 			},
 			retries: {
 				type: "number",
@@ -57,6 +59,10 @@ const cli = meow(
 			},
 			timeout: {
 				type: "number",
+			},
+			showLog: {
+				type: "boolean",
+				default: false,
 			},
 			progress: {
 				type: "boolean",
@@ -74,13 +80,27 @@ const cli = meow(
 	},
 );
 
-try {
-	await main();
-} catch (error) {
-	const message = error instanceof Error ? error.message : String(error);
-	console.error(message);
-	process.exitCode = toExitCode(error);
-}
+type InteractiveDefaults = {
+	quality: string;
+	output: string;
+	filename?: string;
+	retries: number;
+	timeoutSec?: number;
+};
+
+type QualityOption = {
+	value: string;
+	label: string;
+};
+
+const BASE_QUALITY_OPTIONS: QualityOption[] = [
+	{ value: "best", label: "Best available (recommended)" },
+	{ value: "1080p", label: "1080p (Full HD)" },
+	{ value: "720p", label: "720p (HD)" },
+	{ value: "480p", label: "480p (SD)" },
+	{ value: "360p", label: "360p (Data saver)" },
+	{ value: "worst", label: "Smallest file size" },
+];
 
 async function main(): Promise<void> {
 	printStartupBanner(await getCliVersion());
@@ -88,6 +108,13 @@ async function main(): Promise<void> {
 	if (cli.input.length > 1) {
 		throw new InvalidInputError(
 			"Expected at most one URL argument: vidler [url] [options]",
+		);
+	}
+	if (Math.floor(cli.flags.concurrency) !== 1) {
+		console.error(
+			chalk.yellow(
+				"--concurrency is deprecated in v1. Vidler now runs with a single worker.",
+			),
 		);
 	}
 
@@ -108,12 +135,13 @@ async function main(): Promise<void> {
 		jobs: [job],
 		strategies: strategySet.strategies,
 		fallback: strategySet.fallback,
-		concurrency: Math.max(1, Math.floor(cli.flags.concurrency)),
+		concurrency: 1,
 		retries: request.retries,
+		emitLogs: cli.flags.showLog,
 	});
 
 	if (cli.flags.json || !cli.flags.progress || !process.stdout.isTTY) {
-		attachHeadlessOutput(runtime, cli.flags.json);
+		attachHeadlessOutput(runtime, cli.flags.json, cli.flags.showLog);
 		const results = await runtime.start();
 		if (results.some((result) => !result.success)) {
 			process.exitCode = 1;
@@ -122,7 +150,7 @@ async function main(): Promise<void> {
 	}
 
 	console.clear();
-	const ui = render(<App runtime={runtime} />);
+	const ui = render(<App runtime={runtime} showLogs={cli.flags.showLog} />);
 	await ui.waitUntilExit();
 }
 
@@ -161,23 +189,27 @@ __     ___ ____  _     _____ ____
 		[255, 230, 170],
 	] as const;
 	const fallbackColor: readonly [number, number, number] = [255, 230, 170];
+	const versionLine = chalk.rgb(255, 176, 80)(`vidler v${version}`);
+	const descriptionLine = chalk.rgb(
+		145,
+		170,
+		205,
+	)("Your all-in-one command center for fast, high-quality video downloads.");
 
 	for (const [index, line] of bannerLines.entries()) {
 		const color = gradient[index] ?? fallbackColor;
 		const [r, g, b] = color;
-		console.log(chalk.rgb(r, g, b).bold(line));
+		const bannerLine = chalk.rgb(r, g, b).bold(line);
+		if (index === 2) {
+			console.log(`${bannerLine}   ${versionLine}`);
+			continue;
+		}
+		if (index === 3) {
+			console.log(`${bannerLine}   ${descriptionLine}`);
+			continue;
+		}
+		console.log(bannerLine);
 	}
-
-	console.log(chalk.rgb(255, 176, 80)(`vidler v${version}`));
-	console.log(
-		chalk.rgb(
-			145,
-			170,
-			205,
-		)(
-			"Multi-site terminal video downloader with interactive setup and live progress.",
-		),
-	);
 	console.log("");
 }
 
@@ -207,7 +239,7 @@ async function resolveRequestFromInput(): Promise<DownloadRequest> {
 
 	if (!process.stdin.isTTY || cli.flags.json) {
 		throw new InvalidInputError(
-			"URL is required in non-interactive mode: vidler <url> [options]",
+			"Please add a video link: vidler <url> [options]",
 		);
 	}
 
@@ -220,14 +252,6 @@ async function resolveRequestFromInput(): Promise<DownloadRequest> {
 	});
 }
 
-type InteractiveDefaults = {
-	quality: string;
-	output: string;
-	filename?: string;
-	retries: number;
-	timeoutSec?: number;
-};
-
 async function promptInteractiveRequest(
 	defaults: InteractiveDefaults,
 ): Promise<DownloadRequest> {
@@ -237,30 +261,17 @@ async function promptInteractiveRequest(
 	});
 
 	try {
-		console.clear();
-		console.log("vidler interactive setup");
-		console.log("");
+		console.log("✨ Quick setup");
+		console.log("-----------------");
 
-		const inputUrl = await askRequired(rl, "Video URL", "");
-		const parsedUrl = parseHttpUrl(inputUrl);
-
-		const quality = await askWithDefault(
-			rl,
-			"Quality (best, worst, 720p, 1080p)",
-			defaults.quality,
-		);
-		const output = await askWithDefault(
-			rl,
-			"Output directory",
-			defaults.output,
-		);
+		const parsedUrl = await askForValidUrl(rl);
+		const quality = await askForValidQuality(rl, defaults.quality);
+		const outputDir = await askForValidOutputDir(rl, defaults.output);
 		const filenameTemplateRaw = await askWithDefault(
 			rl,
-			"Filename template (blank for default)",
+			"🏷️ Want a custom file name format (leave blank for auto)",
 			defaults.filename ?? "",
 		);
-
-		const outputDir = await ensureOutputDir(output);
 
 		return {
 			url: parsedUrl.toString(),
@@ -273,6 +284,126 @@ async function promptInteractiveRequest(
 	} finally {
 		rl.close();
 	}
+}
+
+async function askForValidUrl(
+	rl: ReturnType<typeof createInterface>,
+): Promise<URL> {
+	for (;;) {
+		const value = await askRequired(
+			rl,
+			"❓ What video would you like to download today",
+			"",
+		);
+		try {
+			return parseHttpUrl(value);
+		} catch (error) {
+			console.log(
+				chalk.yellow(
+					error instanceof Error
+						? `${error.message}. Please try again.`
+						: "That link is not valid. Please try again.",
+				),
+			);
+		}
+	}
+}
+
+async function askForValidQuality(
+	rl: ReturnType<typeof createInterface>,
+	defaultValue: string,
+): Promise<string> {
+	const options = withDefaultQualityOption(defaultValue);
+	const defaultIndex = options.findIndex(
+		(option) => option.value === normalizeQuality(defaultValue),
+	);
+	const safeDefaultIndex = defaultIndex >= 0 ? defaultIndex : 0;
+
+	for (;;) {
+		console.log("");
+		console.log("🎬 Pick your video quality:");
+		for (const [index, option] of options.entries()) {
+			const marker = index === safeDefaultIndex ? "⭐" : " ";
+			console.log(`  ${marker} ${index + 1}. ${option.label}`);
+		}
+
+		const answer = await rl.question(
+			`Select a number [1-${options.length}] (default ${safeDefaultIndex + 1}): `,
+		);
+		const trimmed = answer.trim();
+		if (trimmed.length === 0) {
+			return options[safeDefaultIndex]?.value ?? "best";
+		}
+
+		const selected = Number(trimmed);
+		if (
+			Number.isInteger(selected) &&
+			selected >= 1 &&
+			selected <= options.length
+		) {
+			return options[selected - 1]?.value ?? "best";
+		}
+
+		console.log(chalk.yellow("Please select a valid number from the list."));
+	}
+}
+
+async function askForValidOutputDir(
+	rl: ReturnType<typeof createInterface>,
+	defaultValue: string,
+): Promise<string> {
+	for (;;) {
+		const value = await askWithDefault(
+			rl,
+			"📁 Where should we save it",
+			defaultValue,
+		);
+		try {
+			return await ensureOutputDir(value);
+		} catch (error) {
+			console.log(
+				chalk.yellow(
+					error instanceof Error
+						? `${error.message}. Please try a different folder.`
+						: "We could not use that folder. Please try a different one.",
+				),
+			);
+		}
+	}
+}
+
+function isValidQuality(value: string): boolean {
+	const normalized = normalizeQuality(value);
+	return (
+		normalized === "best" ||
+		normalized === "worst" ||
+		/^\d{3,4}p$/.test(normalized)
+	);
+}
+
+function normalizeQuality(value: string): string {
+	return value.trim().toLowerCase();
+}
+
+function withDefaultQualityOption(defaultValue: string): QualityOption[] {
+	const normalizedDefault = normalizeQuality(defaultValue);
+	if (!isValidQuality(normalizedDefault)) {
+		return BASE_QUALITY_OPTIONS;
+	}
+
+	if (
+		BASE_QUALITY_OPTIONS.some((option) => option.value === normalizedDefault)
+	) {
+		return BASE_QUALITY_OPTIONS;
+	}
+
+	return [
+		{
+			value: normalizedDefault,
+			label: `${normalizedDefault} (from your --quality setting)`,
+		},
+		...BASE_QUALITY_OPTIONS,
+	];
 }
 
 async function askWithDefault(
@@ -304,6 +435,7 @@ async function askRequired(
 function attachHeadlessOutput(
 	runtime: ReturnType<typeof createRuntime>,
 	asJson: boolean,
+	showLogs: boolean,
 ): void {
 	const out = (event: string, payload: unknown) => {
 		if (asJson) {
@@ -319,6 +451,10 @@ function attachHeadlessOutput(
 	runtime.pool.on("jobRetry", (payload) => out("jobRetry", payload));
 	runtime.pool.on("jobCompleted", (payload) => out("jobCompleted", payload));
 	runtime.pool.on("jobFailed", (payload) => out("jobFailed", payload));
+
+	if (showLogs) {
+		runtime.pool.on("jobLog", (payload) => out("jobLog", payload));
+	}
 }
 
 function toObject(input: unknown): Record<string, unknown> {
@@ -353,6 +489,11 @@ function formatPlainEvent(event: string, payload: unknown): string {
 		return `[${event}] ${record.jobId ?? "unknown"} file=${result?.filePath ?? "unknown"}`;
 	}
 
+	if (event === "jobLog") {
+		const stream = record.stream ?? "stdout";
+		return `[${event}] ${record.jobId ?? "unknown"} ${stream}> ${record.message ?? ""}`;
+	}
+
 	return `[${event}] ${JSON.stringify(toObject(payload))}`;
 }
 
@@ -360,6 +501,8 @@ type PlainEventRecord = {
 	jobId?: string;
 	attempt?: number;
 	reason?: string;
+	stream?: "stdout" | "stderr" | "system";
+	message?: string;
 	progress?: { percent?: number; status?: string };
 	result?: { errorMessage?: string; filePath?: string };
 };
@@ -371,3 +514,9 @@ function toPlainEventRecord(input: unknown): PlainEventRecord {
 
 	return {};
 }
+
+void main().catch((error: unknown) => {
+	const message = error instanceof Error ? error.message : String(error);
+	console.error(message);
+	process.exitCode = toExitCode(error);
+});

@@ -1,10 +1,14 @@
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { DownloadError } from "../core/errors.js";
-import { parseYtDlpProgressLine } from "../core/progress-parser.js";
+import {
+	parseYtDlpProgressLine,
+	YT_DLP_PROGRESS_PREFIX,
+} from "../core/progress-parser.js";
 import {
 	bindStrategyToProviders,
 	type DownloadStrategy,
+	type LogEmitter,
 	type ProgressEmitter,
 } from "../core/strategy.js";
 import type {
@@ -43,6 +47,7 @@ export class YtDlpStrategy implements DownloadStrategy {
 	async download(
 		prepared: PreparedJob,
 		emit: ProgressEmitter,
+		emitLog?: LogEmitter,
 	): Promise<DownloadResult> {
 		const startedAt = Date.now();
 		const stderrLines: string[] = [];
@@ -67,6 +72,8 @@ export class YtDlpStrategy implements DownloadStrategy {
 
 			const stdoutReader = createInterface({ input: child.stdout });
 			stdoutReader.on("line", (line) => {
+				emitLog?.({ stream: "stdout", message: line });
+
 				const progress = parseYtDlpProgressLine(line);
 				if (progress) {
 					emit(progress);
@@ -82,6 +89,7 @@ export class YtDlpStrategy implements DownloadStrategy {
 
 			const stderrReader = createInterface({ input: child.stderr });
 			stderrReader.on("line", (line) => {
+				emitLog?.({ stream: "stderr", message: line });
 				stderrLines.push(line);
 			});
 
@@ -105,7 +113,7 @@ export class YtDlpStrategy implements DownloadStrategy {
 				const stderrSnippet = stderrLines.slice(-5).join("\n");
 				reject(
 					new DownloadError(
-						`yt-dlp failed with exit code ${code ?? "unknown"}`,
+						buildYtDlpErrorMessage(code, stderrSnippet),
 						isRetryableStderr(stderrSnippet),
 						stderrSnippet,
 					),
@@ -133,13 +141,17 @@ export class YtDlpStrategy implements DownloadStrategy {
 		const args = [
 			"--newline",
 			"--progress",
+			"--progress-delta",
+			"1",
+			"--progress-template",
+			`download:${YT_DLP_PROGRESS_PREFIX} %(progress.status)s|%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(progress.speed)s|%(progress.eta)s|%(progress._percent_str)s`,
 			"--no-warnings",
 			"-P",
 			job.request.outputDir,
 			"-o",
 			outputTemplate,
 			"-f",
-			toFormatSelector(job.request.quality),
+			toFormatSelector(job.request.quality, Boolean(this.#paths.ffmpegPath)),
 		];
 
 		if (this.#paths.ffmpegPath) {
@@ -151,8 +163,22 @@ export class YtDlpStrategy implements DownloadStrategy {
 	}
 }
 
-function toFormatSelector(quality: string): string {
+function toFormatSelector(quality: string, hasFfmpeg: boolean): string {
 	const normalized = quality.toLowerCase().trim();
+
+	if (!hasFfmpeg) {
+		if (normalized === "worst") {
+			return "worst";
+		}
+
+		const heightMatch = normalized.match(/^(\d{3,4})p$/);
+		if (heightMatch) {
+			const height = Number(heightMatch[1]);
+			return `best[height<=${height}]/best`;
+		}
+
+		return "best";
+	}
 
 	if (normalized === "best") {
 		return "bestvideo+bestaudio/best";
@@ -169,6 +195,33 @@ function toFormatSelector(quality: string): string {
 	}
 
 	return "bestvideo+bestaudio/best";
+}
+
+function buildYtDlpErrorMessage(
+	code: number | null,
+	stderrSnippet: string,
+): string {
+	const hint = getMostRelevantErrorLine(stderrSnippet);
+	if (!hint) {
+		return `yt-dlp failed with exit code ${code ?? "unknown"}`;
+	}
+
+	return `yt-dlp failed with exit code ${code ?? "unknown"}: ${hint}`;
+}
+
+function getMostRelevantErrorLine(stderrSnippet: string): string | undefined {
+	const lines = stderrSnippet
+		.split("\n")
+		.map((line) => line.trim())
+		.filter(Boolean);
+	if (lines.length === 0) {
+		return undefined;
+	}
+
+	const explicitError =
+		lines.findLast((line) => line.toLowerCase().includes("error:")) ??
+		lines[lines.length - 1];
+	return explicitError;
 }
 
 function isRetryableStderr(stderrSnippet: string): boolean {

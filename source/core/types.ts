@@ -53,6 +53,11 @@ export type PreparedJob = {
 export type WorkerEvents = {
 	jobStarted: { jobId: string; provider: ProviderKind; attempt: number };
 	jobProgress: { jobId: string; progress: DownloadProgress };
+	jobLog: {
+		jobId: string;
+		stream: "stdout" | "stderr" | "system";
+		message: string;
+	};
 	jobRetry: {
 		jobId: string;
 		attempt: number;
